@@ -13,6 +13,7 @@ namespace BibliotecaAPI.Data
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<Comentario>().HasQueryFilter(b => !b.EstaBorrado);
 
         }
 

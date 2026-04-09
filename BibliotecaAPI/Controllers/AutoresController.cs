@@ -2,10 +2,15 @@
 using BibliotecaAPI.Data;
 using BibliotecaAPI.DTOs;
 using BibliotecaAPI.Enitities;
+using BibliotecaAPI.Services;
+using BibliotecaAPI.Utilidades;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
+using System.ComponentModel;
+using System.Linq.Dynamic.Core;
 
 namespace BibliotecaAPI.Controllers
 {
@@ -16,11 +21,24 @@ namespace BibliotecaAPI.Controllers
     {
         private readonly ApplicationDBContext context;
         private readonly IMapper mapper;
+        private readonly IAlmacenadorArchivos almacenadorArchivos;
+        private readonly ILogger<AutoresController> logger;
+        private readonly IOutputCacheStore outPutCacheStore;
+        private const string contenedor = "autores";
+        private const string cache = "autores-obtener";
 
-        public AutoresController(ApplicationDBContext context, IMapper mapper)
+        public AutoresController(ApplicationDBContext context,
+            IMapper mapper,
+            IAlmacenadorArchivos almacenadorArchivos,
+            ILogger<AutoresController> logger,
+            IOutputCacheStore outPutCacheStore
+            )
         {
             this.context = context;
             this.mapper = mapper;
+            this.almacenadorArchivos = almacenadorArchivos;
+            this.logger = logger;
+            this.outPutCacheStore = outPutCacheStore;
         }
 
 
@@ -28,16 +46,26 @@ namespace BibliotecaAPI.Controllers
 
         [HttpGet]
         [AllowAnonymous]
-        public async Task<IEnumerable<AutorDTO>> Get()
+        [OutputCache(Tags = [cache])]
+        public async Task<IEnumerable<AutorDTO>> Get([FromQuery] PaginationDTO paginationDTO)
         {
-            var autores = await context.Autores.ToListAsync();
+            var queryable = context.Autores.AsQueryable();
+            await HttpContext.InsertarParametrosPaginacionEnCabecera(queryable);
+            var autores = await queryable
+                                .OrderBy(x => x.Nombres)
+                                .Paginar(paginationDTO).ToListAsync();
             var autoresDTO = mapper.Map<IEnumerable<AutorDTO>>(autores);
             return autoresDTO;
         }
 
         [HttpGet("{id:int}", Name = "ObtenerAutor")] // cuando tiene un parametro {id:int} esto son parametros de ruta.
         [AllowAnonymous]
-        public async Task<ActionResult<AutorConLibrosDTO>> Get(int id)
+        [EndpointSummary("Obtiene autor por Id")]
+        [EndpointDescription("Obtiene un autor por su Id, Incluye los libros asociados al autor")]
+        [ProducesResponseType<AutorConLibrosDTO>(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [OutputCache(Tags = [cache])]
+        public async Task<ActionResult<AutorConLibrosDTO>> Get([Description("El id del autor")] int id)
         {
             var autor = await context.Autores
                 .Include(x => x.Libros)
@@ -54,6 +82,95 @@ namespace BibliotecaAPI.Controllers
             return autorDTO;
         }
 
+        [HttpGet("filtrar")]
+        [AllowAnonymous]
+        public async Task<ActionResult> Filtrar([FromQuery] AutorFiltroDTO autorFiltroDTO)
+        {
+            var queryable = context.Autores.AsQueryable();
+
+            if (!string.IsNullOrEmpty(autorFiltroDTO.Nombres))
+            {
+                queryable = queryable.Where(x => x.Nombres.Contains(autorFiltroDTO.Nombres));
+            }
+
+            if (!string.IsNullOrEmpty(autorFiltroDTO.Apellidos))
+            {
+                queryable = queryable.Where(x => x.Apellidos.Contains(autorFiltroDTO.Apellidos));
+            }
+
+            if (autorFiltroDTO.IncluirLibros)
+            {
+                queryable = queryable.Include(x => x.Libros).ThenInclude(x => x.Libro);
+            }
+
+            if (autorFiltroDTO.TieneFotos.HasValue)
+            {
+                if (autorFiltroDTO.TieneFotos.Value)
+                {
+                    queryable = queryable.Where(x => x.Foto != null);
+
+                }
+                else
+                {
+                    queryable = queryable.Where(x => x.Foto == null);
+                }
+
+            }
+
+            if (autorFiltroDTO.TieneLibros.HasValue)
+            {
+                if (autorFiltroDTO.TieneLibros.Value)
+                {
+                    queryable = queryable.Where(x => x.Libros.Any());
+                }
+                else
+                {
+                    queryable = queryable.Where(x => !x.Libros.Any());
+                }
+            }
+
+            if (!string.IsNullOrEmpty(autorFiltroDTO.TituloLibro))
+            {
+                queryable = queryable.Where(x => x.Libros.Any(y => y.Libro!.Titulo.Contains(autorFiltroDTO.TituloLibro)));
+            }
+
+            if (!string.IsNullOrEmpty(autorFiltroDTO.CampoOrdenar))
+            {
+                var tipoOrden = autorFiltroDTO.OrdenAscendente ? "ascending" : "descending";
+                try
+                {
+                    queryable = queryable.OrderBy($"{autorFiltroDTO.CampoOrdenar} {tipoOrden}");
+                }
+                catch (Exception ex)
+                {
+                    queryable = queryable.OrderBy(x => x.Nombres);
+                    logger.LogError(ex.Message, ex);
+                }
+            }
+            else
+            {
+                queryable = queryable.OrderBy(x => x.Nombres);
+            }
+
+
+            var autores = await queryable
+                                .Paginar(autorFiltroDTO.PaginacionDTO)
+                                .ToListAsync();
+
+            if (autorFiltroDTO.IncluirLibros)
+            {
+                var autoresDTO = mapper.Map<IEnumerable<AutorConLibrosDTO>>(autores);
+                return Ok(autoresDTO);
+            }
+            else
+            {
+                var autoresDTO = mapper.Map<IEnumerable<AutorDTO>>(autores);
+                return Ok(autoresDTO);
+            }
+
+
+        }
+
 
         [HttpPost]
         public async Task<ActionResult> Post(AutorCreateDTO autorCreateDTO)
@@ -61,6 +178,27 @@ namespace BibliotecaAPI.Controllers
             var autor = mapper.Map<Autor>(autorCreateDTO);
             context.Add(autor);
             await context.SaveChangesAsync();
+            await outPutCacheStore.EvictByTagAsync(cache, default);
+
+            var autorDTO = mapper.Map<AutorDTO>(autor);
+
+            return CreatedAtRoute("ObtenerAutor", new { id = autor.Id }, autorDTO);
+        }
+
+        [HttpPost("con-foto")]
+        public async Task<ActionResult> PostConFoto([FromForm] AutorCreacionDTOConFoto autorCreateDTO)
+        {
+            var autor = mapper.Map<Autor>(autorCreateDTO);
+
+            if (autorCreateDTO.Foto is not null)
+            {
+                var urlFoto = await almacenadorArchivos.Almacenar(contenedor, autorCreateDTO.Foto);
+                autor.Foto = urlFoto;
+            }
+
+            context.Add(autor);
+            await context.SaveChangesAsync();
+            await outPutCacheStore.EvictByTagAsync(cache, default);
 
             var autorDTO = mapper.Map<AutorDTO>(autor);
 
@@ -68,14 +206,28 @@ namespace BibliotecaAPI.Controllers
         }
 
         [HttpPut("{id:int}")]
-        public async Task<ActionResult> Put(int id, AutorCreateDTO autorCreateDTO)
+        public async Task<ActionResult> Put(int id, [FromForm] AutorCreacionDTOConFoto autorCreateDTO)
         {
-            var autor = mapper.Map<Autor>(autorCreateDTO);
+            var existeAutor = await context.Autores.AnyAsync(x => x.Id == id);
 
+            if (!existeAutor)
+            {
+                return NotFound();
+            }
+
+            var autor = mapper.Map<Autor>(autorCreateDTO);
             autor.Id = id;
+
+            if (autorCreateDTO.Foto is not null)
+            {
+                var fotoActual = await context.Autores.Where(x => x.Id == id).Select(x => x.Foto).FirstAsync();
+                var urlFoto = await almacenadorArchivos.Editar(fotoActual, contenedor, autorCreateDTO.Foto);
+                autor.Foto = urlFoto;
+            }
 
             context.Update(autor);
             await context.SaveChangesAsync();
+            await outPutCacheStore.EvictByTagAsync(cache, default);
             return NoContent();
         }
 
@@ -106,6 +258,7 @@ namespace BibliotecaAPI.Controllers
 
             mapper.Map(autorPatchDTO, autorDB);
             await context.SaveChangesAsync();
+            await outPutCacheStore.EvictByTagAsync(cache, default);
 
             return NoContent();
         }
@@ -113,11 +266,16 @@ namespace BibliotecaAPI.Controllers
         [HttpDelete("{id:int}")]
         public async Task<ActionResult> Delete(int id)
         {
-            var registrosBorrados = await context.Autores.Where(x => x.Id == id).ExecuteDeleteAsync();
-            if (registrosBorrados == 0)
+            var autor = await context.Autores.FirstOrDefaultAsync(x => x.Id == id);
+            if (autor is null)
             {
                 return NotFound();
             }
+
+            context.Remove(autor);
+            await context.SaveChangesAsync();
+            await outPutCacheStore.EvictByTagAsync(cache, default);
+            await almacenadorArchivos.Borrar(autor.Foto, contenedor);
 
             return NoContent();
         }

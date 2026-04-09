@@ -2,8 +2,10 @@
 using BibliotecaAPI.Data;
 using BibliotecaAPI.DTOs;
 using BibliotecaAPI.Enitities;
+using BibliotecaAPI.Utilidades;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
 
 namespace BibliotecaAPI.Controllers
@@ -15,22 +17,26 @@ namespace BibliotecaAPI.Controllers
     {
         private readonly ApplicationDBContext context;
         private readonly IMapper mapper;
+        private readonly IOutputCacheStore outputCacheStore;
+        private const string cache = "libro-obtener";
 
-
-        public LibroController(ApplicationDBContext context, IMapper mapper)
+        public LibroController(ApplicationDBContext context, IMapper mapper, IOutputCacheStore outputCacheStore)
         {
             this.context = context;
             this.mapper = mapper;
-
+            this.outputCacheStore = outputCacheStore;
         }
 
 
 
         [HttpGet]
         [AllowAnonymous]
-        public async Task<IEnumerable<LibroDTO>> Get()
+        [OutputCache(Tags = [cache])]
+        public async Task<IEnumerable<LibroDTO>> Get([FromQuery] PaginationDTO paginationDTO)
         {
-            var libros = await context.Libros.ToListAsync();
+            var queryable = context.Libros.AsQueryable();
+            await HttpContext.InsertarParametrosPaginacionEnCabecera(queryable);
+            var libros = await queryable.OrderBy(x => x.Titulo).Paginar(paginationDTO).ToListAsync();
             var librosDTO = mapper.Map<IEnumerable<LibroDTO>>(libros);
 
             return librosDTO;
@@ -38,6 +44,7 @@ namespace BibliotecaAPI.Controllers
 
         [HttpGet("{id:int}", Name = "ObtenerLibro")]
         [AllowAnonymous]
+        [OutputCache(Tags = [cache])]
         public async Task<ActionResult<LibrosConAutoresDTO>> Get(int id)
         {
             var libro = await context.Libros
@@ -81,6 +88,7 @@ namespace BibliotecaAPI.Controllers
 
             context.Add(libro);
             await context.SaveChangesAsync();
+            await outputCacheStore.EvictByTagAsync(cache, default);
 
             var libroDTO = mapper.Map<LibroDTO>(libro);
             return CreatedAtRoute("ObtenerLibro", new { id = libro.Id }, libroDTO);
@@ -130,6 +138,7 @@ namespace BibliotecaAPI.Controllers
             AsignarOrdenAutores(libroDb);
 
             await context.SaveChangesAsync();
+            await outputCacheStore.EvictByTagAsync(cache, default);
             return NoContent();
         }
 
@@ -141,6 +150,9 @@ namespace BibliotecaAPI.Controllers
             {
                 return NotFound();
             }
+
+            await outputCacheStore.EvictByTagAsync(cache, default);
+
             return NoContent();
         }
     }
