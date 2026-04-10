@@ -8,10 +8,10 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
 
-namespace BibliotecaAPI.Controllers
+namespace BibliotecaAPI.Controllers.V2
 {
     [ApiController]
-    [Route("api/libros")]
+    [Route("api/v2/libros")]
     [Authorize(Policy = "esadmin")]
     public class LibroController : ControllerBase
     {
@@ -42,7 +42,7 @@ namespace BibliotecaAPI.Controllers
             return librosDTO;
         }
 
-        [HttpGet("{id:int}", Name = "ObtenerLibro")]
+        [HttpGet("{id:int}", Name = "ObtenerLibroV2")]
         [AllowAnonymous]
         [OutputCache(Tags = [cache])]
         public async Task<ActionResult<LibrosConAutoresDTO>> Get(int id)
@@ -63,26 +63,9 @@ namespace BibliotecaAPI.Controllers
         }
 
         [HttpPost]
+        [ServiceFilter<FiltroValidacionLibro>()]
         public async Task<ActionResult> Post(LibroCreateDTO libroCreateDTO)
         {
-
-            if (libroCreateDTO.AutoresIds is null || libroCreateDTO.AutoresIds.Count == 0)
-            {
-                ModelState.AddModelError(nameof(libroCreateDTO.AutoresIds), "No se puede crear un libro sin autores");
-                return ValidationProblem();
-            }
-
-            var autoresIdsExisten = await context.Autores.Where(x => libroCreateDTO.AutoresIds.Contains(x.Id)).Select(x => x.Id).ToListAsync();
-
-            if (autoresIdsExisten.Count != libroCreateDTO.AutoresIds.Count)
-            {
-                var autoresIdsNoExisten = libroCreateDTO.AutoresIds.Except(autoresIdsExisten);
-                var autoresIdsNoExistenString = string.Join(", ", autoresIdsNoExisten);
-                var mensajeError = $"Los siguientes autores no existen: {autoresIdsNoExistenString}";
-                ModelState.AddModelError(nameof(libroCreateDTO.AutoresIds), mensajeError);
-                return ValidationProblem();
-            }
-
             var libro = mapper.Map<Libro>(libroCreateDTO);
             AsignarOrdenAutores(libro);
 
@@ -91,7 +74,7 @@ namespace BibliotecaAPI.Controllers
             await outputCacheStore.EvictByTagAsync(cache, default);
 
             var libroDTO = mapper.Map<LibroDTO>(libro);
-            return CreatedAtRoute("ObtenerLibro", new { id = libro.Id }, libroDTO);
+            return CreatedAtRoute("ObtenerLibroV2", new { id = libro.Id }, libroDTO);
         }
 
         private void AsignarOrdenAutores(Libro libro)
@@ -106,26 +89,9 @@ namespace BibliotecaAPI.Controllers
         }
 
         [HttpPut("{id:int}")]
+        [ServiceFilter<FiltroValidacionLibro>()]
         public async Task<ActionResult> Put(int id, LibroCreateDTO libroCreateDTO)
         {
-
-            if (libroCreateDTO.AutoresIds is null || libroCreateDTO.AutoresIds.Count == 0)
-            {
-                ModelState.AddModelError(nameof(libroCreateDTO.AutoresIds), "No se puede actualizar libro sin autores");
-                return ValidationProblem();
-            }
-
-            var autoresIdExisten = await context.Autores.Where(x => libroCreateDTO.AutoresIds.Contains(x.Id)).Select(x => x.Id).ToListAsync();
-
-            if (autoresIdExisten.Count != libroCreateDTO.AutoresIds.Count)
-            {
-                var autoresIdsNoExisten = libroCreateDTO.AutoresIds.Except(autoresIdExisten);
-                var autoresIdsNoExistenString = string.Join(", ", autoresIdsNoExisten);
-                var mensajeError = $"Los siguientes autores no existen";
-                ModelState.AddModelError(nameof(libroCreateDTO.AutoresIds), mensajeError);
-                return ValidationProblem();
-            }
-
             var libroDb = await context.Libros.Include(x => x.Autores).FirstOrDefaultAsync(x => x.Id == id);
 
             if (libroDb is null)

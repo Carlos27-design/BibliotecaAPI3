@@ -2,6 +2,9 @@ using BibliotecaAPI.Data;
 using BibliotecaAPI.Enitities;
 using BibliotecaAPI.Services;
 using BibliotecaAPI.Swagger;
+using BibliotecaAPI.Utilidades;
+using BibliotecaAPI.Utilidades.V1;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -13,9 +16,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 
 //área de servicios;
-builder.Services.AddOutputCache(options =>
+/*builder.Services.AddOutputCache(options =>
 {
     options.DefaultExpirationTimeSpan = TimeSpan.FromSeconds(60);
+});*/
+
+builder.Services.AddStackExchangeRedisOutputCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("redis");
 });
 
 builder.Services.AddDataProtection();
@@ -33,7 +41,11 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddAutoMapper(typeof(Program));
 
-builder.Services.AddControllers().AddNewtonsoftJson();
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<FiltroTiempoEjecucion>();
+    options.Conventions.Add(new ConvencionAgrupaPorVersion());
+}).AddNewtonsoftJson();
 
 builder.Services.AddDbContext<ApplicationDBContext>(options => options.UseSqlServer(
     builder.Configuration.GetConnectionString("DefaultConnection")
@@ -50,6 +62,19 @@ builder.Services.AddScoped<SignInManager<Usuario>>();
 builder.Services.AddTransient<IServiciosUsuarios, ServiciosUsuarios>();
 
 builder.Services.AddTransient<IAlmacenadorArchivos, AlmacenadorDeArchivosLocal>();
+
+builder.Services.AddScoped<MiFiltroDeAccion>();
+
+builder.Services.AddScoped<FiltroValidacionLibro>();
+
+builder.Services.AddScoped<BibliotecaAPI.Services.V1.IServicioAutores, BibliotecaAPI.Services.V1.ServicioAutores>();
+
+builder.Services.AddScoped<BibliotecaAPI.Services.V1.IGeneradorEnlaces, BibliotecaAPI.Services.V1.GeneradorEnlaces>();
+
+builder.Services.AddScoped<HATEOASAutorAttribute>();
+
+builder.Services.AddScoped<HATEOASAutoresAttribute>();
+
 
 builder.Services.AddHttpContextAccessor();
 
@@ -79,6 +104,24 @@ builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo
     {
+        Version = "v1",
+        Title = "Biblioteca API",
+        Description = "Este es una web api para trabajar con datos de autores y libros",
+        Contact = new OpenApiContact
+        {
+            Email = "carlos@gmail.com",
+            Name = "Carlos Coronado",
+        },
+        License = new OpenApiLicense
+        {
+            Name = "MIT",
+            Url = new Uri("https://opensource.org/license/mit/")
+        }
+    });
+
+    options.SwaggerDoc("v2", new OpenApiInfo
+    {
+        Version = "v2",
         Title = "Biblioteca API",
         Description = "Este es una web api para trabajar con datos de autores y libros",
         Contact = new OpenApiContact
@@ -129,9 +172,29 @@ var app = builder.Build();
 
 
 //El orden de los middlewares es importante, ya que se ejecutan en el orden en el que se registran.
+app.UseExceptionHandler(exceptionHandlerApp => exceptionHandlerApp.Run(async context =>
+{
+    var exceptionHandlerFeature = context.Features.Get<IExceptionHandlerFeature>();
+    var exception = exceptionHandlerFeature?.Error!;
+    var error = new Error
+    {
+        MensajeDeError = exception.Message,
+        StrackTrace = exception.StackTrace,
+        Fecha = DateTime.UtcNow
+    };
+
+    var dbContext = context.RequestServices.GetRequiredService<ApplicationDBContext>();
+    dbContext.Add(error);
+    await dbContext.SaveChangesAsync();
+    await Results.InternalServerError(new { tipo = "Error", mensaje = "Ha ocurrido un error inesperado", estatus = 500 }).ExecuteAsync(context);
+}));
 
 app.UseSwagger();
-app.UseSwaggerUI();
+app.UseSwaggerUI(options =>
+{
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "Biblioteca API V1");
+    options.SwaggerEndpoint("/swagger/v2/swagger.json", "Biblioteca API V2");
+});
 
 app.UseStaticFiles();
 

@@ -9,10 +9,10 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.EntityFrameworkCore;
 
-namespace BibliotecaAPI.Controllers
+namespace BibliotecaAPI.Controllers.V1
 {
     [ApiController]
-    [Route("api/libros/{libroId}/comentarios")]
+    [Route("api/v1/libros/{libroId}/comentarios")]
     [Authorize]
     public class ComentariosController : ControllerBase
     {
@@ -34,7 +34,7 @@ namespace BibliotecaAPI.Controllers
             this.outputCacheStore = outputCacheStore;
         }
 
-        [HttpGet]
+        [HttpGet(Name = "ObtenerComentariosV1")]
         [AllowAnonymous]
         [OutputCache(Tags = [cache])]
         public async Task<ActionResult<List<ComentarioDTO>>> Get(int libroId)
@@ -54,7 +54,7 @@ namespace BibliotecaAPI.Controllers
             return mapper.Map<List<ComentarioDTO>>(comentarios);
         }
 
-        [HttpGet("{id}", Name = "ObtenerComentario")]
+        [HttpGet("{id}", Name = "ObtenerComentarioV1")]
         [AllowAnonymous]
         [OutputCache(Tags = [cache])]
         public async Task<ActionResult<ComentarioDTO>> Get(Guid id)
@@ -71,7 +71,7 @@ namespace BibliotecaAPI.Controllers
             return mapper.Map<ComentarioDTO>(comentario);
         }
 
-        [HttpPost]
+        [HttpPost(Name = "CrearComentarioV1")]
         public async Task<ActionResult> Post(int libroId, ComentarioCreateDTO comentarioCreateDTO)
         {
             var existeLibro = await context.Libros.AnyAsync(x => x.Id == libroId);
@@ -98,10 +98,10 @@ namespace BibliotecaAPI.Controllers
 
             var comentarioDTO = mapper.Map<ComentarioDTO>(comentario);
 
-            return CreatedAtRoute("ObtenerComentario", new { id = comentario.Id, libroId }, comentarioDTO);
+            return CreatedAtRoute("ObtenerComentarioV1", new { id = comentario.Id, libroId }, comentarioDTO);
         }
 
-        [HttpPatch("{id}")]
+        [HttpPatch("{id}", Name = "PatchComentarioV1")]
         public async Task<ActionResult> Patch(Guid id, int libroId, JsonPatchDocument<ComentarioPatchDTO> patchDoc)
         {
             if (patchDoc is null)
@@ -153,7 +153,7 @@ namespace BibliotecaAPI.Controllers
             return NoContent();
         }
 
-        [HttpDelete("{id}")]
+        [HttpDelete("{id}", Name = "BorrarComentarioV1")]
         public async Task<ActionResult> Delete(Guid id, int libroId)
         {
             var existeLibro = await context.Libros.AnyAsync(x => x.Id == libroId);
